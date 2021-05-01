@@ -22,8 +22,8 @@ title: Bits of this, bits of that
 email: grzegorz.siekaniec@gmail.com
 description: >- # this means to ignore newlines until "baseurl:"
   Grzegorz Siekaniec blog.
-baseurl: "" # the subpath of your site, e.g. /blog
-url: "" # the base hostname & protocol for your site, e.g. http://example.com
+baseurl: "/bits-of-this-bits-of-that" # the subpath of your site, e.g. /blog
+url: "https://grzegorz-siekaniec.github.io" # the base hostname & protocol for your site, e.g. http://example.com
 #twitter_username: jekyllrb
 github_username:  grzegorz-siekaniec
 
@@ -31,6 +31,10 @@ github_username:  grzegorz-siekaniec
 theme: minima
 plugins:
   - jekyll-feed
+
+# Build settings
+markdown: kramdown
+permalink: /:year/:title:output_ext
 
 # Exclude from processing.
 # The following items will not be processed, by default.
