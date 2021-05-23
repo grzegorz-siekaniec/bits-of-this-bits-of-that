@@ -32,9 +32,13 @@ theme: minima
 plugins:
   - jekyll-feed
 
+
 # Build settings
 markdown: kramdown
+kramdown:
+   math_engine: katex
 permalink: /:year/:title:output_ext
+katex: 
 
 # Exclude from processing.
 # The following items will not be processed, by default.
