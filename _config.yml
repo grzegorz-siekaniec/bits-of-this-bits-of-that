@@ -36,9 +36,8 @@ plugins:
 # Build settings
 markdown: kramdown
 kramdown:
-   math_engine: katex
+   math_engine: mathjax
 permalink: /:year/:title:output_ext
-katex: 
 
 # Exclude from processing.
 # The following items will not be processed, by default.
