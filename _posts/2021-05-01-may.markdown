@@ -1,16 +1,431 @@
 ---
 layout: post
-title:  "First test post"
+title:  "Solving Location Problem using Benders Decomposition with Gurobi"
 date:   2021-05-01 19:27:50 +0200
 categories: other
 ---
 
+{% include toc.md %}
+
+# Introduction
+
+There are many excellent resources out there, see for instance a series of Paul A. Rubin's posts [1], describing Benders Decomposition and how to implement it. However, I think there is a gap to be filled between description of original, theoretical approach and examples of implementation that are not lost in mathematical details. The intention of this brief post is to describe how one can implement Benders Decomposition in Python using Gurobi to solve classical Facility Location problem.
+
+Let's start with describing what Benders Decompositions is.
 
 
-First post.
+# Benders Decomposition - crash course
+
+Benders Decomposition (BD) is mathematical programming technique used to solve problems with special block structure. It is often used to solve large scale Mixed Integer Programming (MIP) problems. The technique is named after Jacques F. Benders. 
 
 $$
-a + b = c
+\begin{array}{lrclcc}
+\min & d^T y & + & c^T x & &\\
+\textrm{subject to} & By & + & Ax & \ge & b\\
+ & y \in \mathbb{Z}^{n} & & & & \\ 
+ &  & & x \in \mathbb{R}^{m}  & & 
+\end{array}
 $$
 
-$$\cos^2{x} + \sin^2{x} = 1$$
+I will not give a full description of the algorithm as you can find explanation much better than I would ever be able to provide - see [^1] or [^2] for example. However for the sake of completness, let me present a sketch of an approach. A general idea is to divide (*decompose*) the original problem, exploiting its block structure, into: 
+
+1. Master Problem - usually harder, MIP problem, and 
+2. Subproblem(s) - easier, LP problem(s).
+
+Once that is done, the following approach can be used to solve it:
+1. Solve Master problem.
+2. Update Subproblem using the solution to Master Problem. By fixing "hard" variables, subproblem becomes "easy".
+3. Solve Subproblem. 
+4. Use the Subproblem's solution to either:
+    1. determine that the current solution is in fact an optimal solution to the original problem - perform so called optimality test. Or,
+    2. create constraints (cuts) and add them to master problem and repeat. There are two types of cuts that can be added:
+        - optimality cuts: $$ z \ge (b - By)^T u^0 + d^T y $$, where $$u^0$$ is an extreme point.
+        - feasibility cuts: $$ (b - By)^T v^0 \le 0 $$, where $$ v^0 $$ is an extereme ray.
+
+I will try to explain Benders Decomposition using variant of simple location problem.
+
+# Facility/Warehouse/Depot Location problem
+
+Given:
+1. A set of existing warehouses with known supply.
+1. A set of planned locations at which warehouses might be built with fixed annual cost of operating and known supply.
+2. A set of customers with known demands and known cost of serving customer from each warehouse.
+A goal is to: determine which locations to use so that the total annual operating cost of warehouses and transportation cost from the facilities to the customers is minimized.
+
+$$
+\begin{array}{lrclcclr}
+\min & \sum_{i=1}^{n} f_i y_i & + & \sum_{i=1}^{n} \sum_{j=1}^{m} c_{ij} x_{ij} & & & &\\
+\textrm{subject to} & &  & \sum_{j=1}^{m} x_{ij} & \le & s_i y_i & \forall i=1, \ldots, n & \textrm{(1)} \\
+ &  & & \sum_{j=1}^{m} x_{ij} & \ge & d_j & \forall j=1, \ldots, m & \textrm{(2)} \\
+ & y_i \in \{0, 1\} & & & & & \\ 
+ &  & & x_{ij} \in \mathbb{R}_{+}  & & &
+\end{array}
+$$
+
+or in equivalent formulation:
+
+$$
+\begin{array}{lrclcclr}
+\min & \sum_{i=1}^{n} f_i y_i & + & \sum_{i=1}^{n} \sum_{j=1}^{m} c_{ij} x_{ij} & & & &\\
+\textrm{subject to} & s_i y_i & - & \sum_{j=1}^{m} x_{ij} & \ge & 0 & \forall i=1, \ldots, n & \textrm{(1)} \\
+ &  & & \sum_{j=1}^{m} x_{ij} & \ge & d_j & \forall j=1, \ldots, m & \textrm{(2)} \\
+ & y_i \in \{0, 1\} & & & & & \\ 
+ &  & & x_{ij} \in \mathbb{R}_{+}  & & &
+\end{array}
+$$
+
+where
+* $$n$$  - number of warehouses.
+* $$m$$ - number of customers.
+* $$y_i$$ - binary variable indicating whether facility should be built at $$i$$.
+* $$x_{ij}$$ - variable denoting amount of .
+
+You might have noticed that once variables $$y_i$$ are fixed we are left with transportation problem. It is our subproblem.
+
+An input to our problem will be represented as JSON with the following structure:
+
+{% highlight json %}
+{
+  "facilities": [
+    {
+      "name": "Denver",
+      "exists": false,
+      "buildCost": 375000,
+      "supply": 30000,
+      "transportCost": [
+        {
+          "customer": "c1",
+          "cost": 9
+        },
+        {
+          "customer": "c2",
+          "cost": 7
+        },
+        {
+          "customer": "c3",
+          "cost": 5
+        }
+      ]
+    }
+  ]
+}
+{% endhighlight %}
+
+And then loaded into the following data structure - see module `input` for details:
+
+{% highlight python %}
+
+@dataclass(frozen=True)
+class Facility:
+    name: str
+    exists: bool
+    build_cost: float
+    supply: float
+    transport_cost: Dict[str, float]  # customer to cost
+
+
+@dataclass(frozen=True)
+class Customer:
+    name: str
+    demand: float
+
+
+class InputData:
+
+    def __init__(self, facilities: List[Facility], customers: List[Customer]):
+
+        self.facilities = facilities
+        self.customers = customers
+
+{% endhighlight %}
+
+# Implementation
+
+A repository containing all code can be found on [github](https://github.com/grzegorz-siekaniec/benders-decomposition-gurobi).
+
+## Standalone model
+
+As often a case in software development, it is helpful to create a baseline that can be used to verify result and check correctness of implementation using smaller instances. The following function is responsible for building and then solving standalone model.
+
+{% highlight python %}
+def solve_using_standalone_model(input_data: InputData):
+    s = timer()
+    logging.info("[START] solving warehouse location problem using standalone model.")
+
+    single_model = SingleModelBuilder(input_data).build()
+    single_model.write()
+    single_model.solve()
+    single_model.report_results()
+
+    e = timer()
+    logging.info("[END] solving warehouse location problem using standalone model."
+                 "It took %f sec.", e - s)
+{% endhighlight %}
+
+A sample output generated by the function `solve_using_standalone_model` can be seen below:
+
+```
+[START] solving warehouse location problem using standalone model.
+** Final results using standalone model! **
+Objective value: 860000.0
+The facilities at the following locations should be built:
+   Kansas
+   Louis
+[END] solving warehouse location problem using standalone model.It took 0.081524 sec.
+```
+
+It is maybe worth noting that in order to avoid code duplication and potential bugs, all code responsible for building common parts of both models was extracted to separate module `utils`. Below is an example of function responsible for creating supply constraints:
+
+{% highlight python %}
+def build_supply_constraints(data: InputData,
+                             model: grb.Model,
+                             facility_customer_pair_to_column: Dict[Tuple[str, str], grb.Var],
+                             facility_name_to_column: Dict[str, grb.Var]) -> Dict[str, grb.Constr]:
+
+    """
+    Build constraints s_i y_i - \sum_{j=0}^{m} x_ij >= 0, for all i = 1, ..., n
+    """
+
+    facility_to_row = dict()
+    for facility in data.facilities:
+        lhs = [
+            -facility_customer_pair_to_column[(facility.name, customer_name)]
+            for customer_name in facility.transport_cost.keys()
+        ]
+
+        facility_var = facility_name_to_column.get(facility.name, 1)
+        lhs.append(1 * facility.supply * facility_var)
+        lhs = grb.quicksum(lhs)
+        name = f'supply_{facility.name}'
+
+        row = model.addConstr(lhs >= 0.0, name=name)
+        facility_to_row[facility.name] = row
+
+    return facility_to_row
+{% endhighlight %}
+
+## Benders Decomposition
+
+After all those preparation steps let's turn our attention to implementation using Benders decomposition. Let's start with looking again at cuts:
+
+- optimality cuts: $$ z \ge (b - By)^T u^0 + d^T y $$, where $$u^0$$ is an extreme point.
+- feasibility cuts: $$ (b - By)^T v^0 \le 0 $$, where $$ v^0 $$ is an extereme ray.
+
+Extreme point $$u^0$$ and extereme ray $$ v^0 $$ can be obtained by querying solution information for solved subproblem. So the only remaining part is to compute $$(b - By)^T$$. Let's look at its components:
+
+$$
+B = 
+\begin{bmatrix}
+s_1 & 0    &  \ldots &  & 0 \\
+0   & s_2  &  &  & 0 \\
+0   &  & \ddots & \vdots & 0 \\
+0   &  & \ldots & s_i & 0 \\
+0   &  &  & 0 & s_n \\
+0   &  & \ldots & & 0 \\
+\vdots & \ddots &  & & 0 \\
+0   &  & 0 & \ldots & 0 
+\end{bmatrix}_{(n+m) \times n}
+= 
+\begin{bmatrix}
+\textrm{diag}({s}) \\
+\textbf{0}_{m \times n}
+\end{bmatrix}
+$$
+
+and $$b = [0, \ldots 0, d_1, \ldots, d_m]^T \in \mathbb{R}^{n+m} $$. Then we get:
+
+$$
+(b - By)^T = [-s_1 y_1,\, \ldots,\, - s_n y_n,\, d_1,\, \ldots,\, d_m]
+$$
+
+So now it is time to link our theoretical discussion/rozważania (?) to code. Below is a function responsible for solving warehous location problem with Benders Decomposition:
+
+{% highlight python %}
+def solve_using_benders_decomposition(input_data: InputData):
+    s = timer()
+    logging.info("[START] Solving warehouse location problem using Benders Decomposition.")
+
+    master_problem = MasterProblemBuilder(input_data).build()
+    sub_problem = SubProblemBuilder(input_data).build()
+
+    mapping = create_sub_problem_constraint_to_master_column_or_value_map(master_problem, sub_problem, input_data)
+
+    master_problem.register_callback(cb_benders(master_problem, sub_problem, mapping, input_data))
+    master_problem.solve()
+    master_problem.report_results()
+
+    e = timer()
+    logging.info("[END] Solving warehouse location problem using Benders Decomposition."
+                 "It took %f sec.", e - s)
+{% endhighlight %}
+
+As you can see it is divided into three steps:
+1. Creating Master Problem (MP).
+2. Creating Subproblem.
+3. Solving MP by using callbacks.
+
+Let's look at each of those steps
+
+### 1. Creating Master Problem (MP).
+
+A very simple model without any constraints is created at the beginning:
+
+$$
+\begin{array}{lrclcclr}
+\min & \sum_{i=1}^{n} f_i y_i & + & z \\
+ & y_i \in \{0, 1\} & & \\ 
+ & & & z \in \mathbb{R}_{+} \\ 
+\end{array}
+$$
+
+where $$z$$ being a surrogate for contribution from subproblem (transportation problem).
+
+Details of implementation of can be found in [MasterProblemBuilder](https://github.com/grzegorz-siekaniec/benders-decomposition-gurobi/blob/main/benders-decomposition/src/benders_decomposition/master_problem_builder.py).
+
+
+### 2. Creating Subproblem.
+
+A subproblem in our case looks as follows:
+
+$$
+\begin{array}{lrclcclr}
+\min \sum_{i=1}^{n} \sum_{j=1}^{m} c_{ij} x_{ij} & & & &\\
+\textrm{subject to} \sum_{j=1}^{m} x_{ij} & \ge & - s_i y_i^0 & \forall \, i=1, \ldots, n & \textrm{(1)} \\
+ \sum_{j=1}^{m} x_{ij} & \ge & d_j & \forall \, j=1, \ldots, m & \textrm{(2)} \\
+ &  & & x_{ij} \in \mathbb{R}_{+}  & & &
+\end{array}
+$$
+
+where $$y^0$$ is the current value of master problem incubent solution.
+
+### 3. Solving MP by using callbacks.
+
+Now let's finally look at the most interesting part of implementation - linking all the pieces together, adding cuts and solving actual problem. Let's start by looking at pseudo-code of callback function responsible for adding cuts.
+
+```
+if mip_master_problem_solution_available:
+
+  mp_solution = get_master_problem_solution()
+  subproblem.update(mp_solution)
+  subproblem.solve()
+
+  if subproblem.status() == INFEASIBLE:
+    add_feasibility_cut()
+  else if subproblem.status() == OPTIMAL:
+    if not passed_optimality_test(mp_solution, subproblem):
+      add_optimality_cuts()
+```
+
+Now let's look at actual Python implementation.
+
+{% highlight python %}
+def cb_benders(master: MasterProblem,
+               sub_problem: SubProblem,
+               mapping: Dict[grb.Constr, Union[grb.Var, float]],
+               data: InputData):
+
+    def callback_inner(model, where):
+
+        if where == grb.GRB.Callback.MIPSOL:
+
+            # Update sub-problem's RHS based on incumbent solution
+            facility_cols = list(master.facility_to_column.values())
+            mp_facility_values = model.cbGetSolution(facility_cols)
+            facility_names = master.facility_to_column.keys()
+
+            sub_problem_rhs = {facility_name: -data.supply(facility_name) if utils.is_non_zero(val) else 0.0
+                               for facility_name, val in zip(facility_names, mp_facility_values)}
+
+            sub_problem.set_supply_constraint_rhs(sub_problem_rhs)
+
+            # Solve sub-problem
+            sub_problem.solve()
+
+            # Add cuts (lazy constraints) based on sub-problem status
+            if sub_problem.status() == grb.GRB.Status.INFEASIBLE:
+
+                # Add feasibility cut
+                cut = []
+                for facility_name, row in sub_problem.facility_to_supply_constraint.items():
+                    dual_farkas = row.getAttr(grb.GRB.Attr.FarkasDual)
+                    cut.append(dual_farkas * mapping[row])
+
+                for customer_name, row in sub_problem.customer_to_demand_constraint.items():
+                    dual_farkas = row.getAttr(grb.GRB.Attr.FarkasDual)
+                    cut.append(dual_farkas * mapping[row])
+
+                model.cbLazy(grb.quicksum(cut) >= 0)
+
+            elif sub_problem.status() == grb.GRB.Status.OPTIMAL:
+                sub_problem_obj_val = sub_problem.model.getAttr(grb.GRB.Attr.ObjVal)
+                z = master.name_to_column[master.aux_var_name]
+                z_val = model.cbGetSolution(z)
+                if utils.is_non_zero(sub_problem_obj_val - z_val):
+
+                    # Add optimality cut
+                    cut = []
+                    for _, row in sub_problem.facility_to_supply_constraint.items():
+                        dual_supply = row.getAttr(grb.GRB.Attr.Pi)
+                        cut.append(dual_supply * mapping[row])
+                    for _, row in sub_problem.customer_to_demand_constraint.items():
+                        dual_demand = row.getAttr(grb.GRB.Attr.Pi)
+                        cut.append(dual_demand * mapping[row])
+
+                    cut.append(-z)
+                    model.cbLazy(grb.quicksum(cut) <= 0)
+
+    return callback_inner
+{% endhighlight %}
+
+As you can see it is not that far from pseudo code version and it is beauty of Python expresivness.
+
+Let's try to dive into some of details.
+
+We computed a components of $$(b - By)^T$$ vector used to create cuts. The following function is used to map the sub-problem constraint to the components of this vector. Then its output is used during creation of cuts or lazy constraints to be precise.
+
+{% highlight python %}
+def create_sub_problem_constraint_to_master_column_or_value_map(master: MasterProblem,
+                                                                sub_problem: SubProblem,
+                                                                data: InputData)\
+        -> Dict[grb.Constr, Union[grb.Var, float]]:
+
+    mapping = dict()
+    for facility_name, row in sub_problem.facility_to_supply_constraint.items():
+        mapping[row] = -data.supply(facility_name) * master.name_to_column[facility_name]
+
+    for customer_name, row in sub_problem.customer_to_demand_constraint.items():
+        mapping[row] = row.getAttr(grb.GRB.Attr.RHS)
+
+    return mapping
+{% endhighlight %}
+
+In case you wonder why there seems to be used wrond kind if inequality while feasibility cuts are added - `model.cbLazy(grb.quicksum(cut) >= 0)`. The reason is that Gurobi returns Farkas with flipped sign to what I expect. I asked about it on [Gurobi Community Portal - Farkas certificate](https://support.gurobi.com/hc/en-us/community/posts/360055293151-Farkas-certificate) but did not get an answer yet.
+
+
+Maybe a few words of explanation are needed for the way how a callback is passed to Gurobi. I used here a clouser because it is pythonic way to retain a state between execution of callback function. Probably an easier way to explain it is thorugh the following example:
+
+{% highlight python %}
+def generate_multiply(a):
+
+    def multiply(x):
+
+        return a * x
+
+    return multiply
+
+>>> multiply_of_2 = generate_multiply(2)
+>>> multiply_of_2(5)
+10
+>>> multiply_of_3 = generate_multiply(3)
+>>> multiply_of_2(3)
+6
+>>> multiply_of_3(3)
+9
+{% endhighlight %}
+
+
+# References
+
+
+[1] https://orinanobworld.blogspot.com/search/label/Benders%20decomposition \\
+[2] Lasdon, Leon S. (2002), Optimization Theory for Large Systems, Mineola, New York: Dover Publications.
