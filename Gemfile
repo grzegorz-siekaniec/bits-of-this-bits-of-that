@@ -18,6 +18,7 @@ group :jekyll_plugins do
   gem "jekyll-feed", "~> 0.12"
   gem "kramdown-math-katex"
   gem "jekyll-katex"
+  gem "jekyll-compose"
 end
 
 # Windows and JRuby does not include zoneinfo files, so bundle the tzinfo-data gem
