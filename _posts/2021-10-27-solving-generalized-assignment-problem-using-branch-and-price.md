@@ -19,8 +19,8 @@ The most common variant of a problem, called 0-1 Knapsack Problem can be formula
 
 $$
 \begin{array}{lrcl}
-\max & \sum_{i=1}^{m} v_i x_i &\\
-\textrm{subject to} & \sum_{i=1}^{m} w_i x_i & \le & W\\
+\max & \displaystyle\sum_{i=1}^{m} v_i x_i &\\
+\textrm{subject to} & \displaystyle \sum_{i=1}^{m} w_i x_i & \le & W\\
 \end{array}
 $$
 
@@ -36,9 +36,9 @@ As often happens in mathematics, or science in general, an obvious question to a
 
 $$
 \begin{array}{lrclll}
-\max & \sum_{i=0}^{m} \sum_{j=1}^{n} v_{ij} x_{ij} & & &\\
-\textrm{subject to} & \sum_{j=1}^{n} x_{ij} & =& 1 & i=1, \ldots, m & \textrm{(task assignment)} \\
- & \sum_{i=1}^{m} w_{ij} x_{ij} & \le & d_j & j=1, \ldots, n & \textrm{(machine capacity)} \\
+\max & \displaystyle\sum_{i=0}^{m} \sum_{j=1}^{n} v_{ij} x_{ij} & & &\\
+\textrm{subject to} & \displaystyle \sum_{j=1}^{n} x_{ij} & =& 1 & i=1, \ldots, m & \textrm{(task assignment)} \\
+ & \displaystyle  \sum_{i=1}^{m} w_{ij} x_{ij} & \le & c_j & j=1, \ldots, n & \textrm{(machine capacity)} \\
 \end{array}
 $$
 
@@ -47,8 +47,8 @@ where
 * $$m$$  - number of tasks;
 * $$x_{ij}$$ - binary variable indicating whether task $$i$$ is assigned to machine $$j$$;
 * $$v_{ij}$$ - value/profit of assigning task $$i$$ to machine $$j$$;
-* $$v_{ij}$$ - weight of assigning task $$i$$ to machine $$j$$;;
-* $$d_j$$ - capacity of machine $$j$$.
+* $$w_{ij}$$ - weight of assigning task $$i$$ to machine $$j$$;;
+* $$c_j$$ - capacity of machine $$j$$.
 
 # Branch-and-price
 
@@ -67,6 +67,42 @@ Below is flow diagram describing branch-and-price method:
 
 ![Branch-and-Price flow diagram]({{site.baseurl}}/assets/images/2021/OCT/branch-and-price-flow-chart.png)
 
+## Dantzig-Wolfe decomposition
+
+The successful application B&P depends on *tight/strong* model formulation. Model formulation is considered *tight* if solution of its LP relaxation satisfies (frequently) integrality constraints. One of structured approaches to come up with such a formulation is to use Dantzig-Wolfe Decomposition technique. See [1] and [2] for details. We will see example of it applied to Generalized Assignment Problem (GAP).
+
+A conventional/basic formulation was described above. Now, let's try to reformulate problem. Let
+
+$$
+S_j = \{\mathbf{x}: \mathbf{x} \in \{0, 1\}^{m} \wedge \mathbf{x}^T \mathbf{w}_j \le c_j \}
+$$
+
+be a set containing all feasible solutions to Knapsack problem for $$j$$-th machine. Clearly, $$S_j$$ contains finite number of points, so $$S_j = \{ \mathbf{z}_j^1, \ldots, \mathbf{z}_j^{K_j} \}$$, where $$\mathbf{z}_j^k \in \{0, 1\}^{m}$$. You can think about $$\mathbf{z}_j^k \in \{0, 1\}^{m}$$ as 0-1 encoding of tasks that form $$k$$-th feasible solution for machine $$j$$. Now, let $$S = \{ \mathbf{z}_1^1, \ldots, \mathbf{z}_1^{K_1}, \ldots, \mathbf{z}_n^1, \ldots, \mathbf{z}_n^{K_n} \}$$ be a set of all feasible solution to GAP. It, potentially, contains a very large number of elements. Then, every point $$x_{ij}$$ can be expressed by the following convex combination:
+
+$$
+\begin{array}{rcll}
+x_{ij} & = & \displaystyle \sum_{k=1}^{K_j} z_{ij}^k \lambda_j ^k & \\ 
+\displaystyle \sum_{k=1}^{K_j} \lambda_j ^k & = & 1, & j=1,\ldots, n \\
+\lambda_i ^k & \in & \{0, 1\} & j=1,\ldots, n, \ k = 1, \ldots, K_j
+\end{array}
+$$
+
+where $$z_{ij}^k \in \{0, 1\} $$, and $$z_{ij}^k = 1$$ iff task $$i$$ is assigned to machine $$j$$ in $$k$$-th feasible solution for the machine.
+
+Now, let's use this representation to reformulate GAP:
+
+$$
+\begin{array}{lrclll}
+\max &\displaystyle \sum_{j=1}^{n}\sum_{k=0}^{K_j} \left( v_{ij} z_{ij}^k \right) \lambda_j ^k & & &\\
+\textrm{subject to} & \displaystyle \sum_{j=1}^{n}\sum_{k=0}^{K_j} z_{ij}^k \lambda_j ^k  & = & 1 & i=1, \ldots, m & \textrm{(task assignment)} \\
+& \displaystyle \sum_{k=0}^{K_j} \lambda_j ^k & = & 1 & j=1, \ldots, n & \textrm{(convexity)} \\
+\end{array}
+$$
+
+Note that we do not need capacity restrictions as they are embedded into definition of feasible solution for machine $$j$$.
+
+Now that we have formulation that is suitable for column generation, let's turn our attention to it.
+
 ## Column generation
 
 Column generation is another crucial component of branch-and-price. There are many great resources devoted to column generation so I will mention only core points:
@@ -83,3 +119,84 @@ Below is flow diagram describing column generation method:
 {:refdef: style="text-align: center;"}
 ![Column generation flow diagram]({{site.baseurl}}/assets/images/2021/OCT/column-generation-flow-diagram.png)
 {: refdef}
+
+## Branching rule
+
+# Implementation
+
+Let's see how one approach to implement B&P to solve Generalized Assignment Problem might look like. Below is discussion about main concepts and few code excerpts, a repository containing all code can be found on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi).
+
+```python
+@dataclass(frozen=True)
+class GeneralAssignmentProblem:
+
+    num_tasks: int
+    num_machines: int
+    weights: np.ndarray  # shape: num_machines x num_tasks
+    profits: np.ndarray  # shape: num_machines x num_tasks
+    capacity: np.ndarray  # shape: num_machines x num_tasks
+```
+
+An example of problem instance taken from [1] is:
+
+```python
+num_machines = 2
+num_tasks = 3
+profits = np.array([
+    [10, 7, 5],
+    [6, 8, 11]
+])
+
+weights = np.array([
+    [9, 6, 3],
+    [5, 7, 9]
+])
+
+capacity = np.array([11, 18])
+```
+
+## Standalone model
+
+It is always good idea to have a reference simple(r) implementation that can be used to validate our results using more sophisticated methods. In our case it is the first, conventional, model. Implementation can be found in repo by checking classes `GAPStandaloneModelBuilder` and `GAPStandaloneModel`. Formulation for a problem instance presented above looks as follows:
+
+```
+\ Model gap_standalone_model
+\ LP format - for model browsing. Use MPS format to capture full model detail.
+Maximize
+  10 task_0_machine_0 + 6 task_0_machine_1 
+   + 7 task_1_machine_0 + 8 task_1_machine_1 
+   + 5 task_2_machine_0 + 11 task_2_machine_1
+Subject To
+ task_assignment_0: task_0_machine_0 + task_0_machine_1 = 1
+ task_assignment_1: task_1_machine_0 + task_1_machine_1 = 1
+ task_assignment_2: task_2_machine_0 + task_2_machine_1 = 1
+ machine_capacity_0: 9 task_0_machine_0 + 6 task_1_machine_0 + 3 task_2_machine_0 <= 11
+ machine_capacity_1: 5 task_0_machine_1 + 7 task_1_machine_1 + 9 task_2_machine_1 <= 18
+Bounds
+Binaries
+ task_0_machine_0 task_0_machine_1 
+ task_1_machine_0 task_1_machine_1
+ task_2_machine_0 task_2_machine_1
+End
+```
+
+Now let's try to examine building blocks of B&P to discus main part at the end, once all the puzzles are there.
+
+## Initial solution
+
+To start column generation process, we need to have an initial solution. One possible way to derive it is to use two-phase Simplex method. In first step, you add slack variables to each constraint and set objective function as their sum. Then you minimize the problem. If your solution has objective value 0, then first of all you have initial solution and you know that your problem is feasible. In case you end up with positive for any of slack variables, it means that you concluded that your problem is infeasible. You can stop here.
+
+I took a different approach and came up with simple heuristic that generate initial solution. I have not analyzed it thoroughly so I am not sure if it is guaranteed to always return feasible solution if one exists. Its idea is quite simple:
+1. Solves a sequence of minimum weight matching problems for bipartite graph:
+    1. Construct bipartite graph defined as $$G=(V, A)$$, where $$V = T \cup M$$ - $$T$$ is set of tasks and obviously $$M$$ is set of machines. There exists arc $$a = (t, m)$$ if $$w_{tm} \le rc_{tm}$$, where $$rc_{m}$$ is remaining capacity. Initially remaining capacity is equal to capacity of machine and with each iteration, and assignment of task to machine it is being update. If $$\vert A \vert = 0$$, then stop.
+    2. Solves a minimum weight matching problem. 
+    3. Updates assignments - say that according to solution task $$t_0$$ should be assigned to machine $$m_0$$, then $$\overline{rc}_{m_0} = rc_{m_0} - w_{t_0 m_0}$$.
+2. For every unassigned task - $$t_0$$:
+    1. Find a machine where task is contributing with the lowest weight - say machine $$m_0 = \arg\min \{ m: w_{t_0 m} \}$$.
+    2. Free up remaining capacity so there is enough space for $$t_0$$ on machine $$m_0$$. Any tasks that was de-assigned in a process is added to pool of unassigned tasks.
+    3. Repeat until there are no unassigned tasks.
+
+# References
+
+[1] Der-San Chen, Robert G. Batson, Yu Dang (2010), Applied Integer Programming - Modeling and Solution, Willey \\
+[2] Lasdon, Leon S. (2002), Optimization Theory for Large Systems, Mineola, New York: Dover Publications.
