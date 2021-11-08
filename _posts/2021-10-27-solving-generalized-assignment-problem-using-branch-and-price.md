@@ -120,7 +120,7 @@ Below is flow diagram describing column generation method:
 ![Column generation flow diagram]({{site.baseurl}}/assets/images/2021/OCT/column-generation-flow-diagram.png)
 {: refdef}
 
-## Branching rule
+
 
 # Implementation
 
@@ -196,7 +196,48 @@ I took a different approach and came up with simple heuristic that generate init
     2. Free up remaining capacity so there is enough space for $$t_0$$ on machine $$m_0$$. Any tasks that was de-assigned in a process is added to pool of unassigned tasks.
     3. Repeat until there are no unassigned tasks.
 
+See details on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi/blob/main/branch-and-price/src/branch_and_price/initial_solution_finder.py#L11).
+
+## Branching rule
+
+As we said before the most important piece needed to implement B&P is branching rules that does not destroy structure of subproblem. Let's consider non-integral solution to RMP. Given convexity constraint it means that there exists machine $$j_0$$ and at least two, and for sake of example say exactly two, $$0 < \lambda_{j_0} ^{k_1} < 1$$ and $$0 < \lambda_{j_0} ^{k_2} < 1$$ such that $$ \lambda_{j_0} ^{k_1} + \lambda_{j_0} ^{k_2} = 1 $$. Since with each of them is connected different assignment (set of tasks), then it leads us to a conclusion that there exists task $$i_0$$ such that $$x_{i_0 j_0} < 1$$ expressed in variables from the original formulation. Now, let's us this information to formulate branching rule:
+
+* left child node: a task $$i_0$$ must be assigned to a machine $$j_0$$.
+* right child node: a task $$i_0$$ cannot be assigned to a machine $$j_0$$.
+
+It can be represented by:
+
+```python
+@dataclasses.dataclass(frozen=True)
+class BranchingRule:
+    task: int
+    machine: int
+    assigned: bool
+```
+
+Note that we can use it easily to filter out initial columns for each node that do not satisfy those conditions:
+- left child node: column representing assignment of tasks, $$T_j$$, to machine $$j$$ is *kept* if: 
+    * $$j = j_0$$ and task $$i_0 \in T_{j_0}$$, or
+    * $$j \neq j_0$$ and task $$i_0 \notin T_{j}$$.
+- right childe node: column representing assignment of tasks, $$T_j$$, to machine $$j$$ is *filtered out* if: 
+    * $$j = j_0$$ and task $$i_0 \in T_{j_0}$$.
+
+See on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi/blob/b58ccc227ea86122a7154227f2bf43e7ed193639/branch-and-price/src/branch_and_price/branch_node.py#L289).
+
+Based on the same principle, subproblem's pool of feasible solution are created - i.e. on left child node:
+* knapsack subproblem for machine $$j_0$$ -- variable representing task $$i_0$$ is forced to be $$1$$.
+* knapsack subproblem for machine $$j \neq j_0$$ -- variable representing task $$i_0$$ is forced to be $$0$$.
+
+Similarly for right childe node. See on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi/blob/b58ccc227ea86122a7154227f2bf43e7ed193639/branch-and-price/src/branch_and_price/subproblem_builder.py#L78).
+
+## Column generation
+
+
+
+
+
 # References
 
 [1] Der-San Chen, Robert G. Batson, Yu Dang (2010), Applied Integer Programming - Modeling and Solution, Willey \\
 [2] Lasdon, Leon S. (2002), Optimization Theory for Large Systems, Mineola, New York: Dover Publications.
+[3] Article
