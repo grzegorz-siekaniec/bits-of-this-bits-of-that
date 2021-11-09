@@ -200,12 +200,12 @@ See details on [github](https://github.com/grzegorz-siekaniec/branch-and-price-g
 
 ## Branching rule
 
-As we said before the most important piece needed to implement B&P is branching rules that does not destroy structure of subproblem. Let's consider non-integral solution to RMP. Given convexity constraint it means that there exists machine $$j_0$$ and at least two, and for sake of example say exactly two, $$0 < \lambda_{j_0} ^{k_1} < 1$$ and $$0 < \lambda_{j_0} ^{k_2} < 1$$ such that $$ \lambda_{j_0} ^{k_1} + \lambda_{j_0} ^{k_2} = 1 $$. Since with each of them is connected different assignment (set of tasks), then it leads us to a conclusion that there exists task $$i_0$$ such that $$x_{i_0 j_0} < 1$$ expressed in variables from the original formulation. Now, let's us this information to formulate branching rule:
+As we said before the most important piece needed to implement B&P is branching rules which does not destroy structure of subproblem. Let's consider non-integral solution to RMP. Given convexity constraint it means that there exists machine $$j_0$$ and at least two, and for sake of example say exactly two, $$0 < \lambda_{j_0} ^{k_1} < 1$$ and $$0 < \lambda_{j_0} ^{k_2} < 1$$ such that $$ \lambda_{j_0} ^{k_1} + \lambda_{j_0} ^{k_2} = 1 $$. Since with each of $$\lambda$$s is connected different assignment (set of tasks), then it leads us to a conclusion that there exists task $$i_0$$ such that $$x_{i_0 j_0} < 1$$ expressed in variables from the original formulation. , . Now, let's use this information to formulate branching rule:
 
 * left child node: a task $$i_0$$ must be assigned to a machine $$j_0$$.
 * right child node: a task $$i_0$$ cannot be assigned to a machine $$j_0$$.
 
-It can be represented by:
+We can say that branching is done, using again standard formulation, based on original variables $$x_{ij}$$. And it can be represented by:
 
 ```python
 @dataclasses.dataclass(frozen=True)
@@ -215,7 +215,7 @@ class BranchingRule:
     assigned: bool
 ```
 
-Note that we can use it easily to filter out initial columns for each node that do not satisfy those conditions:
+Note that we can use it to easily to filter out initial columns for each node that do not satisfy those conditions:
 - left child node: column representing assignment of tasks, $$T_j$$, to machine $$j$$ is *kept* if: 
     * $$j = j_0$$ and task $$i_0 \in T_{j_0}$$, or
     * $$j \neq j_0$$ and task $$i_0 \notin T_{j}$$.
@@ -232,9 +232,256 @@ Similarly for right childe node. See on [github](https://github.com/grzegorz-sie
 
 ## Column generation
 
+Below is an outline of main loop of column generation. It is an implementation of flow diagram from above so I will not spend too much time on describing it. The only part maybe worth commenting is `stop_due_to_no_progress` - it decided whether column generation did not make any progress in last $$k$$-iterations and it should be stop due to tailing-off effect.
 
 
+```python
+class BranchNode:
 
+    def __init__(self, ...):
+        # ...
+        self._rmp = grb.Model(f'GAP_RMP_{self.id}')
+
+
+    def _solve_using_column_generation(self):
+        # ... 
+
+        while True:
+            # ...
+
+            self._rmp.optimize()
+
+            if stop_due_to_no_progress():
+                break
+
+            columns_added = self._solve_knapsack_subproblems()
+            if not columns_added:
+                break
+
+    def _solve_knapsack_subproblems(self) -> bool:
+
+        try:
+            # obtain duals associated with tasks, solution might be infeasible
+            # but duals will be returned
+            task_duals = [row.Pi for _, row in self.task_to_assignment_constraint.items()]
+            machine_duals = [row.Pi for _, row in self.machine_to_assignment_constraint.items()]
+        except AttributeError:
+            # no dual information
+            return False
+
+        subproblem_builder = SubproblemBuilder(gap_instance=self.gap_instance)
+
+        columns_added = False
+        for machine_id in range(self.gap_instance.num_machines):
+
+            machine_dual = machine_duals[machine_id]
+            
+            # building knapsack subproblem using dual information
+            subproblem = subproblem_builder.build(machine_id=machine_id,
+                                                  machine_dual=machine_dual,
+                                                  task_duals=task_duals,
+                                                  branching_rules=self.branching_rules)
+
+            subproblem.solve()
+            subproblem_objective_value = subproblem.objective_value()
+
+            # are there any columns with positive reduced cost?
+            # only those can improve RMP solution
+            if subproblem_objective_value is None or subproblem_objective_value <= 0:
+                continue
+
+            columns_added = True
+
+            for machine_schedule in subproblem.all_solutions():
+                self._add_column_to_rmp(machine_schedule)
+
+        return columns_added                
+```
+
+Now, let's see how constructing subproblems, solving them and then adding back column(s) to RMP looks like. We have as many subproblems as machines. Once solution is available, we check whether it has positive reduced cost. A solution to knapsack problem corresponds to column in RMP. So if the column with positive reduced cost was identified and added, then new iteration of column generation will be executed. Gurobi allows to query information about all other identified solution, so we can utilize this feature and add all columns that have the same objective value as optimal solution, potentially adding more than one column and hoping it will positively impact solution time.
+
+```python
+class BranchNode:
+
+    # ...
+
+    def _solve_knapsack_subproblems(self) -> bool:
+
+        try:
+            # obtain duals associated with tasks, solution might be infeasible
+            # but duals will be returned
+            task_duals = [row.Pi for _, row in self.task_to_assignment_constraint.items()]
+            machine_duals = [row.Pi for _, row in self.machine_to_assignment_constraint.items()]
+        except AttributeError:
+            # no dual information
+            return False
+
+        subproblem_builder = SubproblemBuilder(gap_instance=self.gap_instance)
+
+        columns_added = False
+        for machine_id in range(self.gap_instance.num_machines):
+
+            machine_dual = machine_duals[machine_id]
+            
+            # building knapsack subproblem using dual information
+            subproblem = subproblem_builder.build(machine_id=machine_id,
+                                                  machine_dual=machine_dual,
+                                                  task_duals=task_duals,
+                                                  branching_rules=self.branching_rules)
+
+            subproblem.solve()
+            subproblem_objective_value = subproblem.objective_value()
+
+            # are there any columns with positive reduced cost?
+            # only those can improve RMP solution
+            if subproblem_objective_value is None or subproblem_objective_value <= 0:
+                continue
+
+            columns_added = True
+
+            for machine_schedule in subproblem.all_solutions():
+                self._add_column_to_rmp(machine_schedule)
+
+        return columns_added    
+```
+
+Note that each subproblem is independent so in principle they could be solved in parallel. However due to Python Global Interpreter Lock (GIL) that prevent CPU-bounded threads to run in parallel, they are solved sequentially. Additionally depending on your Gurobi license, you might not be allowed to solve all those models in parallel even if Python would allow it.
+
+Below you can find example of one of the RMPs solved:
+
+```
+\ Model GAP_RMP_2
+\ LP format - for model browsing. Use MPS format to capture full model detail.
+Maximize
+  26 machine_0_tasks_1_2_4_5 + 20 machine_0_tasks_0_2_4 + 27 machine_0_tasks_0_1_3_4 
+  + 29 machine_0_tasks_0_1_2_4 + 19 machine_0_tasks_0_4_5
+  + 15 machine_1_tasks_2_3_5 + 9 machine_1_tasks_5_6 + 13 machine_1_tasks_0_1_3 
+  + 13 machine_1_tasks_2_6
+   
+Subject To
+ task_assignment_0: machine_0_tasks_0_2_4 + machine_0_tasks_0_4_5
+   + machine_0_tasks_0_1_3_4 + machine_0_tasks_0_1_2_4 
+   + machine_1_tasks_0_1_3  = 1
+ task_assignment_1: machine_0_tasks_1_2_4_5 + machine_0_tasks_0_1_3_4 
+   + machine_0_tasks_0_1_2_4   + machine_1_tasks_0_1_3 = 1
+ task_assignment_2: machine_0_tasks_1_2_4_5 + machine_0_tasks_0_2_4
+    + machine_0_tasks_0_1_2_4
+    + machine_1_tasks_2_3_5 + machine_1_tasks_2_6 = 1
+ task_assignment_3: machine_1_tasks_2_3_5 + machine_1_tasks_0_1_3
+   + machine_0_tasks_0_1_3_4 = 1
+ task_assignment_4: machine_0_tasks_1_2_4_5 + machine_0_tasks_0_2_4
+   + machine_0_tasks_0_4_5 + machine_0_tasks_0_1_3_4
+   + machine_0_tasks_0_1_2_4 = 1
+ task_assignment_5: machine_0_tasks_1_2_4_5 + machine_0_tasks_0_4_5 
+   + machine_1_tasks_2_3_5 + machine_1_tasks_5_6 = 1
+ task_assignment_6: machine_1_tasks_5_6 + machine_1_tasks_2_6 = 1
+ convexity_machine_0: machine_0_tasks_1_2_4_5 + machine_0_tasks_0_2_4
+   + machine_0_tasks_0_4_5 + machine_0_tasks_0_1_3_4
+   + machine_0_tasks_0_1_2_4 = 1
+ convexity_machine_1: machine_1_tasks_2_3_5 + machine_1_tasks_5_6
+   + machine_1_tasks_0_1_3 + machine_1_tasks_2_6 = 1
+Bounds
+End
+```
+
+and subproblem with dual information passed:
+
+```
+\ Model GAP_Subproblem
+\ LP format - for model browsing. Use MPS format to capture full model detail.
+Maximize
+  4.333333333333333 task_0_machine_0 + 3.833333333333333 task_1_machine_0
+   + 0.5 task_2_machine_0 - 0.3333333333333339 task_3_machine_0
+   + 4.333333333333334 task_4_machine_0 + 3.5 task_5_machine_0
+   + 6.166666666666666 task_6_machine_0 - 12.16666666666667 Constant
+Subject To
+ machine_capacity_0: 4 task_0_machine_0 + task_1_machine_0
+   + 2 task_2_machine_0 + task_3_machine_0 + 4 task_4_machine_0
+   + 3 task_5_machine_0 + 8 task_6_machine_0 <= 11
+Bounds
+ Constant = 1
+Binaries
+ task_0_machine_0 task_1_machine_0 task_2_machine_0 task_3_machine_0
+ task_4_machine_0 task_5_machine_0 task_6_machine_0
+End
+```
+
+## Branch-and-Price
+
+Now that we have all building blocks prepared, then let's turn our attention back to B&P.
+
+```python
+class GAPBranchAndPrice:
+
+    def solve(self):
+        queue: Queue[BranchNode] = Queue([
+            self._create_root_node()
+        ])
+
+        # ...
+
+        while not queue.is_empty():
+
+            current_node = queue.pop()
+
+            current_node.solve()
+
+            if not current_node.is_feasible():
+                continue
+
+            if current_node.has_integer_solution():
+                update_best_found_solution()
+            else:
+                obj = current_node.objective_value()
+                if nodes := self._branch(current_node, mip_lb):
+                    include_nd, exclude_nd = nodes
+                    queue.push(include_nd)
+                    queue.push(exclude_nd)
+
+        best_solution_node.report_integer_solution()
+
+    @classmethod
+    def _branch(cls, node: BranchNode, mip_lb: float) -> Optional[Tuple[BranchNode, BranchNode]]:
+
+        if mip_lb is not None and node.objective_value() <= mip_lb:
+            # in case node's LP value is lower than
+            # so far found MIP LB, then whole tree rooted at node
+            # can be discarded
+            return None
+
+        if node.objective_value() == math.nan:
+            # Model after branching might become infeasible
+            return None
+
+        # based on current solution obtain id of task and machine
+        machine, task = node.machine_task_to_branch_on()
+
+        # create two branching rules
+        exclude_branching = BranchingRule(task, machine, assigned=False)
+        include_branching = BranchingRule(task, machine, assigned=True)
+
+        # current branching rules
+        br_rls = node.branching_rules
+
+        exclude_nd = BranchNode(
+            node.gap_instance,
+            copy.deepcopy(br_rls) + [exclude_branching],
+            copy.deepcopy(node.get_machine_schedules()),
+        )
+
+        include_nd = BranchNode(
+            node.gap_instance,
+            copy.deepcopy(br_rls) + [include_branching],
+            copy.deepcopy(node.get_machine_schedules()),
+        )
+
+        return exclude_nd, include_nd
+
+```
+
+# Summary
+
+We have seen how to use B&P with Python and Gurobi to solve GAP.
 
 # References
 
