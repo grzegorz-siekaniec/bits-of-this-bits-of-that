@@ -21,6 +21,7 @@ $$
 \begin{array}{lrcl}
 \max & \displaystyle\sum_{i=1}^{m} v_i x_i &\\
 \textrm{subject to} & \displaystyle \sum_{i=1}^{m} w_i x_i & \le & W\\
+& x_i & \in &  \{0, 1\} \\
 \end{array}
 $$
 
@@ -32,13 +33,14 @@ where
 * $$W$$ - maximum weight capacity.
 
 
-As often happens in mathematics, or science in general, an obvious question to ask is how the problem can be generalized. One of generalization is Generalized Assignment Problem. It answers question - how to find a maximum profit assignment of $$m$$ tasks to $$n$$ machines such that each task ($$i=0, \ldots, m$$) is assigned to exactly one machine ($$j=1, \ldots, n$$), and one machine can have multiple tasks assigned to subject to its capacity limitation.
+As often happens in mathematics, or science in general, an obvious question to ask is how the problem can be generalized. One of generalization is Generalized Assignment Problem. It answers question - how to find a maximum profit assignment of $$m$$ tasks to $$n$$ machines such that each task ($$i=0, \ldots, m$$) is assigned to exactly one machine ($$j=1, \ldots, n$$), and one machine can have multiple tasks assigned to subject to its capacity limitation. Its standard formulation is presented below:
 
 $$
 \begin{array}{lrclll}
 \max & \displaystyle\sum_{i=0}^{m} \sum_{j=1}^{n} v_{ij} x_{ij} & & &\\
 \textrm{subject to} & \displaystyle \sum_{j=1}^{n} x_{ij} & =& 1 & i=1, \ldots, m & \textrm{(task assignment)} \\
  & \displaystyle  \sum_{i=1}^{m} w_{ij} x_{ij} & \le & c_j & j=1, \ldots, n & \textrm{(machine capacity)} \\
+ &  x_{ij} & \in & \{0, 1\} &  &  \\
 \end{array}
 $$
 
@@ -47,7 +49,7 @@ where
 * $$m$$  - number of tasks;
 * $$x_{ij}$$ - binary variable indicating whether task $$i$$ is assigned to machine $$j$$;
 * $$v_{ij}$$ - value/profit of assigning task $$i$$ to machine $$j$$;
-* $$w_{ij}$$ - weight of assigning task $$i$$ to machine $$j$$;;
+* $$w_{ij}$$ - weight of assigning task $$i$$ to machine $$j$$;
 * $$c_j$$ - capacity of machine $$j$$.
 
 # Branch-and-price
@@ -59,9 +61,9 @@ Branch-and-price builds at the top of branch-and-bound framework. It applies col
  * Objective value of the current solution is greater than best lower bound.
  * The current solution does *not* satisfy integrality constraints.
  
-However, if first two conditions are met but not the third one, meaning the current solution *satisfies* integrality constraints, then the best solution and lower bound are updated (lower bound is tightened) with respectively the current solution and its objective value.
+However, if only first two conditions are met but not the third one, meaning the current solution *satisfies* integrality constraints, then the best solution and lower bound are updated (lower bound is tightened) with respectively the current solution and its objective value.
 
-The crucial element needed to apply branch-and-price successfully is to find branching scheme. It is tailored to specific problem to make sure that it does not destroy problem structure and can be used in pricing subproblem to effectively generate columns respecting branching rules that can enter Restricted Master Problem (RMP).
+The crucial element needed to apply branch-and-price successfully is to find branching scheme. It is tailored to specific problem to make sure that it does not destroy problem structure and can be used in pricing subproblem to effectively generate columns that enter Restricted Master Problem (RMP) while respecting branching rules .
 
 Below is flow diagram describing branch-and-price method:
 
@@ -69,9 +71,9 @@ Below is flow diagram describing branch-and-price method:
 
 ## Dantzig-Wolfe decomposition
 
-The successful application B&P depends on *tight/strong* model formulation. Model formulation is considered *tight* if solution of its LP relaxation satisfies (frequently) integrality constraints. One of structured approaches to come up with such a formulation is to use Dantzig-Wolfe Decomposition technique. See [1] and [2] for details. We will see example of it applied to Generalized Assignment Problem (GAP).
+The successful application B&P depends on *tight/strong* model formulation. Model formulation is considered *tight* if solution of its LP relaxation satisfies (frequently) integrality constraints. One of structured approaches to come up with such a formulation is to use Dantzig-Wolfe Decomposition technique. We will see example of it applied to Generalized Assignment Problem (GAP).
 
-A conventional/basic formulation was described above. Now, let's try to reformulate problem. Let
+A standard formulation was described above. Now, let's try to reformulate problem. Let
 
 $$
 S_j = \{\mathbf{x}: \mathbf{x} \in \{0, 1\}^{m} \wedge \mathbf{x}^T \mathbf{w}_j \le c_j \}
@@ -124,7 +126,7 @@ Below is flow diagram describing column generation method:
 
 # Implementation
 
-Let's see how one approach to implement B&P to solve Generalized Assignment Problem might look like. Below is discussion about main concepts and few code excerpts, a repository containing all code can be found on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi).
+Let's see how one can approach implementation of B&P to solve Generalized Assignment Problem. Below is discussion about main concepts and few code excerpts, a repository containing all code can be found on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi).
 
 ```python
 @dataclass(frozen=True)
@@ -157,7 +159,7 @@ capacity = np.array([11, 18])
 
 ## Standalone model
 
-It is always good idea to have a reference simple(r) implementation that can be used to validate our results using more sophisticated methods. In our case it is the first, conventional, model. Implementation can be found in repo by checking classes `GAPStandaloneModelBuilder` and `GAPStandaloneModel`. Formulation for a problem instance presented above looks as follows:
+It is always good idea to have a reference simple(r) implementation that can be used to validate our results using more sophisticated methods. In our case it is based on standard problem formulation. Implementation can be found in repo by checking classes `GAPStandaloneModelBuilder` and `GAPStandaloneModel`. Formulation for a problem instance presented above looks as follows:
 
 ```
 \ Model gap_standalone_model
@@ -184,28 +186,28 @@ Now let's try to examine building blocks of B&P to discus main part at the end, 
 
 ## Initial solution
 
-To start column generation process, we need to have an initial solution. One possible way to derive it is to use two-phase Simplex method. In first step, you add slack variables to each constraint and set objective function as their sum. Then you minimize the problem. If your solution has objective value 0, then first of all you have initial solution and you know that your problem is feasible. In case you end up with positive for any of slack variables, it means that you concluded that your problem is infeasible. You can stop here.
+To start column generation process, we need to have an initial solution. One possible way to derive it is to use two-phase Simplex method. In first step, you add slack variables to each constraint and set objective function as their sum. Then you minimize the problem. If your solution has objective value $$0$$, then first of all you have initial solution and you know that your problem is feasible. In case you end up with positive value for any of slack variables, you can conclude that the problem is infeasible. You can stop here.
 
 I took a different approach and came up with simple heuristic that generate initial solution. I have not analyzed it thoroughly so I am not sure if it is guaranteed to always return feasible solution if one exists. Its idea is quite simple:
 1. Solves a sequence of minimum weight matching problems for bipartite graph:
-    1. Construct bipartite graph defined as $$G=(V, A)$$, where $$V = T \cup M$$ - $$T$$ is set of tasks and obviously $$M$$ is set of machines. There exists arc $$a = (t, m)$$ if $$w_{tm} \le rc_{tm}$$, where $$rc_{m}$$ is remaining capacity. Initially remaining capacity is equal to capacity of machine and with each iteration, and assignment of task to machine it is being update. If $$\vert A \vert = 0$$, then stop.
-    2. Solves a minimum weight matching problem. 
-    3. Updates assignments - say that according to solution task $$t_0$$ should be assigned to machine $$m_0$$, then $$\overline{rc}_{m_0} = rc_{m_0} - w_{t_0 m_0}$$.
+    1. Construct bipartite graph defined as $$G=(V, A)$$, where $$V = T \cup M$$ -- $$T$$ is set of tasks and obviously $$M$$ is set of machines. There exists arc $$a = (t, m)$$ if $$w_{tm} \le rc_{m}$$, where $$rc_{m}$$ is remaining capacity for machine $$m$$. Initially remaining capacity is equal to capacity of machine and with each iteration, and assignment of task to machine it is being update. If $$\vert A \vert = 0$$, then stop.
+    2. Solve a minimum weight matching problem. 
+    3. Update assignments -- say that according to solution task $$t_0$$ should be assigned to machine $$m_0$$, then $$\overline{rc}_{m_0} = rc_{m_0} - w_{t_0 m_0}$$.
 2. For every unassigned task - $$t_0$$:
-    1. Find a machine where task is contributing with the lowest weight - say machine $$m_0 = \arg\min \{ m: w_{t_0 m} \}$$.
-    2. Free up remaining capacity so there is enough space for $$t_0$$ on machine $$m_0$$. Any tasks that was de-assigned in a process is added to pool of unassigned tasks.
+    1. Find a machine where task is contributing with the lowest weight -- say machine $$m_0 = \arg\min \{ m: w_{t_0 m} \}$$.
+    2. Free up remaining capacity so there is enough space for $$t_0$$ on machine $$m_0$$. Any tasks that were de-assigned in a process are added to pool of unassigned tasks.
     3. Repeat until there are no unassigned tasks.
 
 See details on [github](https://github.com/grzegorz-siekaniec/branch-and-price-gurobi/blob/main/branch-and-price/src/branch_and_price/initial_solution_finder.py#L11).
 
 ## Branching rule
 
-As we said before the most important piece needed to implement B&P is branching rules which does not destroy structure of subproblem. Let's consider non-integral solution to RMP. Given convexity constraint it means that there exists machine $$j_0$$ and at least two, and for sake of example say exactly two, $$0 < \lambda_{j_0} ^{k_1} < 1$$ and $$0 < \lambda_{j_0} ^{k_2} < 1$$ such that $$ \lambda_{j_0} ^{k_1} + \lambda_{j_0} ^{k_2} = 1 $$. Since with each of $$\lambda$$s is connected different assignment (set of tasks), then it leads us to a conclusion that there exists task $$i_0$$ such that $$x_{i_0 j_0} < 1$$ expressed in variables from the original formulation. , . Now, let's use this information to formulate branching rule:
+As we said before the most important piece needed to implement B&P is branching rules which does not destroy structure of subproblem. Let's consider non-integral solution to RMP. Given convexity constraint it means that there exists machine $$j_0$$ and at least two, and for sake of example say exactly two, $$0 < \lambda_{j_0} ^{k_1} < 1$$ and $$0 < \lambda_{j_0} ^{k_2} < 1$$ such that $$ \lambda_{j_0} ^{k_1} + \lambda_{j_0} ^{k_2} = 1 $$. Since with each of $$\lambda$$s is connected different assignment (set of tasks), then it leads us to a conclusion that there exists task $$i_0$$ such that $$x_{i_0 j_0} < 1$$ expressed in variables from the original formulation. Now, let's use this information to formulate branching rule:
 
 * left child node: a task $$i_0$$ must be assigned to a machine $$j_0$$.
 * right child node: a task $$i_0$$ cannot be assigned to a machine $$j_0$$.
 
-We can say that branching is done, using again standard formulation, based on original variables $$x_{ij}$$. And it can be represented by:
+We can say that branching is based on $$x_{ij}$$ from standard formulation. And it can be represented by:
 
 ```python
 @dataclasses.dataclass(frozen=True)
@@ -215,7 +217,7 @@ class BranchingRule:
     assigned: bool
 ```
 
-Note that we can use it to easily to filter out initial columns for each node that do not satisfy those conditions:
+Note that we can use the branching rule to easily to filter out initial columns for each node that do not satisfy those conditions:
 - left child node: column representing assignment of tasks, $$T_j$$, to machine $$j$$ is *kept* if: 
     * $$j = j_0$$ and task $$i_0 \in T_{j_0}$$, or
     * $$j \neq j_0$$ and task $$i_0 \notin T_{j}$$.
@@ -232,7 +234,7 @@ Similarly for right childe node. See on [github](https://github.com/grzegorz-sie
 
 ## Column generation
 
-Below is an outline of main loop of column generation. It is an implementation of flow diagram from above so I will not spend too much time on describing it. The only part maybe worth commenting is `stop_due_to_no_progress` - it decided whether column generation did not make any progress in last $$k$$-iterations and it should be stop due to tailing-off effect.
+Below is an outline of main loop of column generation. It is an implementation of flow diagram from above so I will not spend too much time describing it. The only part maybe worth commenting is `stop_due_to_no_progress` - it evaluates whether column generation did not make any progress in last $$k$$-iterations and it should be stop.
 
 
 ```python
@@ -298,7 +300,7 @@ class BranchNode:
         return columns_added                
 ```
 
-Now, let's see how constructing subproblems, solving them and then adding back column(s) to RMP looks like. We have as many subproblems as machines. Once solution is available, we check whether it has positive reduced cost. A solution to knapsack problem corresponds to column in RMP. So if the column with positive reduced cost was identified and added, then new iteration of column generation will be executed. Gurobi allows to query information about all other identified solution, so we can utilize this feature and add all columns that have the same objective value as optimal solution, potentially adding more than one column and hoping it will positively impact solution time.
+Now, let's see how constructing subproblems, solving them and then adding back column(s) to RMP looks like. We have as many subproblems as machines. Once a solution is available, we check whether it has positive reduced cost. A solution to knapsack problem corresponds to column in RMP. So if the column with positive reduced cost was identified and added, then new iteration of column generation will be executed. Gurobi allows to query information about all other identified solutions, so we can utilize this feature and add all columns that have the same objective value as optimal solution, potentially adding more than one column and hoping it will positively impact solution time.
 
 ```python
 class BranchNode:
@@ -347,7 +349,7 @@ class BranchNode:
 
 Note that each subproblem is independent so in principle they could be solved in parallel. However due to Python Global Interpreter Lock (GIL) that prevent CPU-bounded threads to run in parallel, they are solved sequentially. Additionally depending on your Gurobi license, you might not be allowed to solve all those models in parallel even if Python would allow it.
 
-Below you can find example of one of the RMPs solved:
+Below you can find example of one of the RMPs:
 
 ```
 \ Model GAP_RMP_2
@@ -481,10 +483,10 @@ class GAPBranchAndPrice:
 
 # Summary
 
-We have seen how to use B&P with Python and Gurobi to solve GAP.
+In the blog post, Branch-and-Price technique for solving MIP was explained. An example of applying B&P for Generalized Assignment Problem was presented. The solution approach used Python as programming language and Gurobi as solver.
 
 # References
 
-[1] Der-San Chen, Robert G. Batson, Yu Dang (2010), Applied Integer Programming - Modeling and Solution, Willey \\
-[2] Lasdon, Leon S. (2002), Optimization Theory for Large Systems, Mineola, New York: Dover Publications.
-[3] Article
+[1] Der-San Chen, Robert G. Batson, Yu Dang (2010), Applied Integer Programming - Modeling and Solution, Willey. \\
+[2] Lasdon, Leon S. (2002), Optimization Theory for Large Systems, Mineola, New York: Dover Publications. \\
+[3] Cynthia Barnhart, Ellis L. Johnson, George L. Nemhauser, Martin W. P. Savelsbergh, Pamela H. Vance, (1998) Branch-and-Price: Column Generation for Solving Huge Integer Programs. Operations Research 46(3):316-329.
